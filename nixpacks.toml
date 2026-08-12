@@ -1,5 +1,7 @@
+providers = ["python", "node"]
+
 [phases.setup]
-nixPkgs = ["python311", "nodejs_20", "ffmpeg"]
+nixPkgs = ["ffmpeg"]
 
 [start]
 cmd = "uvicorn app.main:app --host 0.0.0.0 --port 3000"
