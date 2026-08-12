@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard — YouTube Live Loop{% endblock %}
+
+{% block content %}
+<div class="stats-grid">
+  <div class="stat-card">
+    <span class="stat-label">Total Channels</span>
+    <span class="stat-value">{{ stats.total_channels }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Active Channels</span>
+    <span class="stat-value">{{ stats.active_streams }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Live Streams</span>
+    <span class="stat-value" style="color: var(--status-running);">{{ stats.running_streams }}</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Downloaded Videos</span>
+    <span class="stat-value">{{ stats.total_videos }}</span>
+  </div>
+</div>
+
+<div class="section-header">
+  <h1 class="section-title">Managed Channels</h1>
+  <a href="/channels/new" class="btn btn-primary">+ Add Channel</a>
+</div>
+
+<div class="channel-grid">
+  {% if channels %}
+    {% for channel in channels %}
+      {% include "partials/channel_card.html" %}
+    {% endfor %}
+  {% else %}
+    <div class="empty-state">
+      <div class="empty-title">No Channels Configured</div>
+      <div class="empty-desc">Add your first YouTube channel to start automated looping live streams.</div>
+      <a href="/channels/new" class="btn btn-primary">+ Add First Channel</a>
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

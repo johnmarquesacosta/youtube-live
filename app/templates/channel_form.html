@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}{% if is_edit %}Edit {{ channel.display_name }}{% else %}New Channel{% endif %} — YouTube Live Loop{% endblock %}
+
+{% block content %}
+<div class="form-container">
+  <div style="margin-bottom: 1.5rem;">
+    <h2>{% if is_edit %}Edit Channel Settings{% else %}Add New Channel{% endif %}</h2>
+    <p class="form-hint">Configure channel parameters and RTMP streaming key</p>
+  </div>
+
+  {% if error %}
+  <div class="alert-error">{{ error }}</div>
+  {% endif %}
+
+  <form action="{% if is_edit %}/channels/{{ channel.id }}/edit{% else %}/channels/new{% endif %}" method="POST">
+    {% if not is_edit %}
+    <div class="form-group">
+      <label class="form-label" for="id">Internal Slug ID *</label>
+      <input type="text" id="id" name="id" class="form-control" placeholder="e.g. canal-a" required pattern="[a-z0-9\-_]+" value="{{ form_data.id if form_data else '' }}">
+      <span class="form-hint">Unique identifier used for folder structure (lowercase, hyphens, underscores)</span>
+    </div>
+    {% else %}
+    <div class="form-group">
+      <label class="form-label">Internal Slug ID</label>
+      <input type="text" class="form-control" value="{{ channel.id }}" disabled style="opacity: 0.6;">
+    </div>
+    {% endif %}
+
+    <div class="form-group">
+      <label class="form-label" for="display_name">Display Name *</label>
+      <input type="text" id="display_name" name="display_name" class="form-control" placeholder="e.g. Lofi Chill Beats 24/7" required value="{{ channel.display_name if is_edit else (form_data.display_name if form_data else '') }}">
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="youtube_channel_id">YouTube Channel ID or Handle *</label>
+      <input type="text" id="youtube_channel_id" name="youtube_channel_id" class="form-control" placeholder="e.g. UCxxxxxxxxxxxxxx or @handle" required value="{{ channel.youtube_channel_id if is_edit else (form_data.youtube_channel_id if form_data else '') }}">
+      <span class="form-hint">Channel ID starting with UC or handle starting with @</span>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="stream_key">YouTube RTMP Stream Key *</label>
+      <input type="password" id="stream_key" name="stream_key" class="form-control" placeholder="e.g. xxxx-xxxx-xxxx-xxxx-xxxx" required value="{{ channel.stream_key if is_edit else (form_data.stream_key if form_data else '') }}">
+      <span class="form-hint">Found in YouTube Live Control Room -> Stream Settings</span>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="video_count">Number of Videos to Loop (X)</label>
+      <input type="number" id="video_count" name="video_count" class="form-control" min="1" max="100" value="{{ channel.video_count if is_edit else (form_data.video_count if form_data else 20) }}">
+      <span class="form-hint">Downloads the top X most recent videos from the channel</span>
+    </div>
+
+    <div class="form-group">
+      <label class="form-label" for="check_interval_hours">Check Interval (Hours)</label>
+      <input type="number" id="check_interval_hours" name="check_interval_hours" class="form-control" min="1" max="168" value="{{ channel.check_interval_hours if is_edit else (form_data.check_interval_hours if form_data else 6) }}">
+      <span class="form-hint">How often to check for new uploaded videos</span>
+    </div>
+
+    <div class="form-group" style="flex-direction: row; align-items: center; gap: 0.75rem; margin-top: 0.5rem;">
+      <input type="checkbox" id="is_active" name="is_active" value="true" style="width: 18px; height: 18px;" {% if is_edit %}{% if channel.is_active %}checked{% endif %}{% else %}checked{% endif %}>
+      <label class="form-label" for="is_active" style="margin-bottom: 0;">Enable automated streaming loop</label>
+    </div>
+
+    <div style="display: flex; gap: 1rem; margin-top: 2rem;">
+      <button type="submit" class="btn btn-primary" style="flex: 1;">
+        {% if is_edit %}Save Changes{% else %}Create Channel{% endif %}
+      </button>
+      <a href="/" class="btn btn-secondary">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
