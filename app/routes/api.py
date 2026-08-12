@@ -28,8 +28,9 @@ def get_channel_or_404(channel_id: str) -> dict:
 def render_channel_card(request: Request, channel_id: str) -> HTMLResponse:
     channel = get_channel_or_404(channel_id)
     return templates.TemplateResponse(
-        "partials/channel_card.html",
-        {"request": request, "channel": channel}
+        request=request,
+        name="partials/channel_card.html",
+        context={"channel": channel}
     )
 
 

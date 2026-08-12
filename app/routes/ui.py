@@ -24,7 +24,7 @@ router = APIRouter()
 async def login_page(request: Request):
     if is_authenticated(request):
         return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
-    return templates.TemplateResponse("login.html", {"request": request, "hide_nav": True})
+    return templates.TemplateResponse(request=request, name="login.html", context={"hide_nav": True})
 
 
 @router.post("/login", response_class=HTMLResponse)
@@ -34,8 +34,9 @@ async def login_post(request: Request, username: str = Form(...), password: str 
         return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
     
     return templates.TemplateResponse(
-        "login.html",
-        {"request": request, "error": "Invalid username or password.", "hide_nav": True},
+        request=request,
+        name="login.html",
+        context={"error": "Invalid username or password.", "hide_nav": True},
         status_code=status.HTTP_401_UNAUTHORIZED
     )
 
@@ -70,8 +71,7 @@ async def dashboard(request: Request):
         total_videos=total_videos
     )
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
+    return templates.TemplateResponse(request=request, name="dashboard.html", context={
         "channels": channels,
         "stats": stats
     })
@@ -82,8 +82,7 @@ async def new_channel_page(request: Request):
     if not is_authenticated(request):
         return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
 
-    return templates.TemplateResponse("channel_form.html", {
-        "request": request,
+    return templates.TemplateResponse(request=request, name="channel_form.html", context={
         "is_edit": False
     })
 
@@ -115,8 +114,7 @@ async def create_channel(
             is_active=is_active_bool
         )
     except Exception as e:
-        return templates.TemplateResponse("channel_form.html", {
-            "request": request,
+        return templates.TemplateResponse(request=request, name="channel_form.html", context={
             "is_edit": False,
             "error": str(e),
             "form_data": {
@@ -132,8 +130,7 @@ async def create_channel(
     with get_db() as conn:
         existing = conn.execute("SELECT id FROM channels WHERE id = ?", (channel_data.id,)).fetchone()
         if existing:
-            return templates.TemplateResponse("channel_form.html", {
-                "request": request,
+            return templates.TemplateResponse(request=request, name="channel_form.html", context={
                 "is_edit": False,
                 "error": f"Channel with ID '{channel_data.id}' already exists.",
                 "form_data": channel_data.model_dump()
@@ -174,8 +171,7 @@ async def edit_channel_page(request: Request, id: str):
             raise HTTPException(status_code=404, detail="Channel not found")
         channel = dict(channel_row)
 
-    return templates.TemplateResponse("channel_form.html", {
-        "request": request,
+    return templates.TemplateResponse(request=request, name="channel_form.html", context={
         "is_edit": True,
         "channel": channel
     })

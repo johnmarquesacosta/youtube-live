@@ -177,8 +177,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 
 VOLUME /data
-EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 3000
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "3000"]
 ```
 
 ## 9. docker-compose.yml
@@ -188,7 +188,7 @@ services:
   youtube-live-loop:
     build: .
     ports:
-      - "8000:8000"
+      - "3000:3000"
     volumes:
       - app-data:/data
     environment:
