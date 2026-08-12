@@ -140,7 +140,7 @@ def fetch_latest_video_ids_ytdlp(channel_identifier: str, video_count: int = 20)
         "yt-dlp",
         "--flat-playlist",
         "--playlist-end", str(video_count * 2),
-        "--extractor-args", "youtube:player_client=android,ios,web",
+        "--extractor-args", "youtube:player_client=web,mweb,android",
         "--match-filter", "!is_live & !is_upcoming",
         "--sleep-requests", "1",
         "--retries", "5",
