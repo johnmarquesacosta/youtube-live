@@ -48,7 +48,6 @@ def download_and_normalize_video(channel_id: str, video_id: str) -> str:
         "yt-dlp",
         "-f", "bv*[height<=1080]+ba/b",
         "--extractor-args", "youtube:player_client=web",
-        "--js-runtimes", "node",
         "--no-playlist",
         "-o", raw_template,
     ]
