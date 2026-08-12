@@ -1,7 +1,7 @@
 services:
   youtube-live-loop:
     build: .
-    command: uvicorn app.main:app --host 0.0.0.0 --port 3000
+    command: python -m uvicorn app.main:app --host 0.0.0.0 --port 3000
     ports:
       - "3000:3000"
     volumes:
