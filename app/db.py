@@ -52,6 +52,19 @@ def init_db() -> None:
                 file_path TEXT,
                 downloaded_at TIMESTAMP,
                 position INTEGER,
+                status TEXT NOT NULL DEFAULT 'ready',
+                error_message TEXT,
                 UNIQUE(channel_id, youtube_video_id)
             );
         """)
+        
+        # Migration: Add status and error_message columns if they don't exist
+        try:
+            conn.execute("ALTER TABLE channel_videos ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'")
+        except sqlite3.OperationalError:
+            pass # Column already exists
+            
+        try:
+            conn.execute("ALTER TABLE channel_videos ADD COLUMN error_message TEXT")
+        except sqlite3.OperationalError:
+            pass # Column already exists

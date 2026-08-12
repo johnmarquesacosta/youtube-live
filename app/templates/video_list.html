@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+
+{% block title %}Videos for {{ channel.display_name }} — YouTube Live Loop{% endblock %}
+
+{% block content %}
+<div class="section-header">
+  <div>
+    <h1 class="section-title">Videos: {{ channel.display_name }}</h1>
+    <p class="section-subtitle">YouTube ID: <code>{{ channel.youtube_channel_id }}</code></p>
+  </div>
+  <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
+</div>
+
+<div class="card">
+  <table class="table" style="width: 100%; border-collapse: collapse; text-align: left;">
+    <thead>
+      <tr style="border-bottom: 1px solid var(--border-color);">
+        <th style="padding: 1rem;">Thumbnail</th>
+        <th style="padding: 1rem;">Video ID</th>
+        <th style="padding: 1rem;">Status</th>
+        <th style="padding: 1rem;">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for video in videos %}
+      <tr style="border-bottom: 1px solid var(--border-color);">
+        <td style="padding: 1rem; width: 150px;">
+          <a href="https://youtube.com/watch?v={{ video.youtube_video_id }}" target="_blank">
+            <img src="https://img.youtube.com/vi/{{ video.youtube_video_id }}/mqdefault.jpg" 
+                 alt="Thumbnail" 
+                 style="width: 120px; border-radius: 8px; box-shadow: 0 4px 6px rgba(0,0,0,0.1);">
+          </a>
+        </td>
+        <td style="padding: 1rem;">
+          <code>{{ video.youtube_video_id }}</code>
+          <div style="font-size: 0.85rem; color: var(--text-secondary); margin-top: 0.5rem;">
+            Pos: {{ video.position }}
+          </div>
+        </td>
+        <td style="padding: 1rem;">
+          {% if video.status == 'ready' %}
+            <span class="badge badge-success" style="background: rgba(16, 185, 129, 0.1); color: #10b981;">Ready</span>
+          {% elif video.status == 'error' %}
+            <span class="badge badge-error" style="background: rgba(239, 68, 68, 0.1); color: #ef4444;">Error</span>
+            <div style="font-size: 0.8rem; color: #ef4444; margin-top: 0.5rem; max-width: 250px; overflow-wrap: break-word;">
+              {{ video.error_message }}
+            </div>
+          {% else %}
+            <span class="badge badge-warning" style="background: rgba(245, 158, 11, 0.1); color: #f59e0b;">{{ video.status | capitalize }}</span>
+          {% endif %}
+        </td>
+        <td style="padding: 1rem;">
+          {% if video.status == 'error' or video.status == 'pending' %}
+            <form action="/channels/{{ channel.id }}/videos/{{ video.youtube_video_id }}/upload" 
+                  method="POST" 
+                  enctype="multipart/form-data" 
+                  style="display: flex; flex-direction: column; gap: 0.5rem; max-width: 250px;">
+              <input type="file" name="video_file" accept="video/mp4" required style="font-size: 0.85rem; padding: 0.25rem;">
+              <button type="submit" class="btn btn-primary btn-sm">Upload Manual MP4</button>
+            </form>
+          {% else %}
+            <span style="color: var(--text-secondary); font-size: 0.9rem;">No action needed</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4" style="padding: 2rem; text-align: center; color: var(--text-secondary);">
+          No videos found for this channel. Wait for the next sync or trigger it manually from the dashboard.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

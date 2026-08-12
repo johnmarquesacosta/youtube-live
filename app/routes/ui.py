@@ -2,6 +2,7 @@ import os
 import json
 import shutil
 import logging
+from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Request, Form, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
@@ -427,3 +428,71 @@ async def import_channels(request: Request, config_file: UploadFile = File(...))
         info["error"] = f"Import error: {e}"
         return templates.TemplateResponse(request=request, name="settings.html", context=info,
                                           status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.get("/channels/{id}/videos", response_class=HTMLResponse)
+async def video_list_page(request: Request, id: str):
+    if not is_authenticated(request):
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    with get_db() as conn:
+        channel_row = conn.execute("SELECT * FROM channels WHERE id = ?", (id,)).fetchone()
+        if not channel_row:
+            raise HTTPException(status_code=404, detail="Channel not found")
+        channel = dict(channel_row)
+
+        video_rows = conn.execute(
+            "SELECT * FROM channel_videos WHERE channel_id = ? ORDER BY position ASC",
+            (id,)
+        ).fetchall()
+        videos = [dict(v) for v in video_rows]
+
+    return templates.TemplateResponse(request=request, name="video_list.html", context={
+        "channel": channel,
+        "videos": videos
+    })
+
+
+@router.post("/channels/{id}/videos/{video_id}/upload")
+async def upload_manual_video(request: Request, id: str, video_id: str, video_file: UploadFile = File(...)):
+    if not is_authenticated(request):
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    # Make sure channel exists
+    with get_db() as conn:
+        channel_row = conn.execute("SELECT * FROM channels WHERE id = ?", (id,)).fetchone()
+        if not channel_row:
+            raise HTTPException(status_code=404, detail="Channel not found")
+
+    data_dir = os.getenv("DATA_DIR", "./data")
+    videos_dir = os.path.join(data_dir, id, "videos")
+    os.makedirs(videos_dir, exist_ok=True)
+    
+    file_path = os.path.join(videos_dir, f"{video_id}.mp4")
+
+    try:
+        # Save the uploaded file
+        with open(file_path, "wb") as f:
+            shutil.copyfileobj(video_file.file, f)
+            
+        # Update the database
+        now_str = datetime.utcnow().isoformat()
+        with get_db() as conn:
+            conn.execute("""
+                UPDATE channel_videos SET
+                    file_path = ?,
+                    downloaded_at = ?,
+                    status = 'ready',
+                    error_message = NULL
+                WHERE channel_id = ? AND youtube_video_id = ?
+            """, (file_path, now_str, id, video_id))
+            
+        logger.info(f"Manual video upload successful for {video_id} (Channel: {id})")
+    except Exception as e:
+        logger.error(f"Error saving manual upload for {video_id}: {e}")
+        # Could render an error template or flash message, but simple redirect for now
+        pass
+    finally:
+        video_file.file.close()
+
+    return RedirectResponse(url=f"/channels/{id}/videos", status_code=status.HTTP_303_SEE_OTHER)

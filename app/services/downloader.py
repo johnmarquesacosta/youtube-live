@@ -113,30 +113,61 @@ def sync_channel_videos(channel_id: str, target_video_ids: List[str]) -> bool:
 
     with get_db() as conn:
         existing_rows = conn.execute(
-            "SELECT youtube_video_id, file_path FROM channel_videos WHERE channel_id = ?",
+            "SELECT youtube_video_id, file_path, status FROM channel_videos WHERE channel_id = ?",
             (channel_id,)
         ).fetchall()
-        existing_map = {row["youtube_video_id"]: row["file_path"] for row in existing_rows}
+        existing_map = {row["youtube_video_id"]: row for row in existing_rows}
 
-    # 1. Download missing videos
+    # 1. Insert any new target videos as 'pending'
     for idx, video_id in enumerate(target_video_ids):
-        existing_file = existing_map.get(video_id)
-        if not existing_file or not os.path.exists(existing_file):
+        if video_id not in existing_map:
+            with get_db() as conn:
+                conn.execute("""
+                    INSERT INTO channel_videos (channel_id, youtube_video_id, status, position)
+                    VALUES (?, ?, 'pending', ?)
+                """, (channel_id, video_id, idx))
+            changed = True
+            # Update the map so we can process it in the next step
+            existing_map[video_id] = {"file_path": None, "status": "pending"}
+
+    # 2. Process downloads for videos that are not 'ready'
+    for idx, video_id in enumerate(target_video_ids):
+        video_record = existing_map.get(video_id)
+        
+        # We only need to download if it's not ready or if the file doesn't exist
+        is_ready = video_record and video_record["status"] == "ready"
+        file_path = video_record["file_path"] if video_record else None
+        file_exists = file_path and os.path.exists(file_path)
+        
+        if not is_ready or not file_exists:
             try:
+                # Set status to downloading/pending (optional, could just leave as pending)
                 norm_path = download_and_normalize_video(channel_id, video_id)
                 now_str = datetime.utcnow().isoformat()
                 with get_db() as conn:
                     conn.execute("""
-                        INSERT INTO channel_videos (channel_id, youtube_video_id, file_path, downloaded_at, position)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(channel_id, youtube_video_id) DO UPDATE SET
-                            file_path = excluded.file_path,
-                            downloaded_at = excluded.downloaded_at,
-                            position = excluded.position
-                    """, (channel_id, video_id, norm_path, now_str, idx))
+                        UPDATE channel_videos SET
+                            file_path = ?,
+                            downloaded_at = ?,
+                            position = ?,
+                            status = 'ready',
+                            error_message = NULL
+                        WHERE channel_id = ? AND youtube_video_id = ?
+                    """, (norm_path, now_str, idx, channel_id, video_id))
                 changed = True
             except Exception as e:
                 logger.error(f"Error downloading/normalizing video {video_id} for channel {channel_id}: {e}")
+                # Save the error status
+                error_msg = str(e)
+                with get_db() as conn:
+                    conn.execute("""
+                        UPDATE channel_videos SET
+                            status = 'error',
+                            error_message = ?,
+                            position = ?
+                        WHERE channel_id = ? AND youtube_video_id = ?
+                    """, (error_msg, idx, channel_id, video_id))
+                changed = True
         else:
             # Update position if needed
             with get_db() as conn:
@@ -145,11 +176,12 @@ def sync_channel_videos(channel_id: str, target_video_ids: List[str]) -> bool:
                     (idx, channel_id, video_id)
                 )
 
-    # 2. Prune old videos no longer in target_video_ids
+    # 3. Prune old videos no longer in target_video_ids
     target_set = set(target_video_ids)
-    for v_id, file_path in existing_map.items():
+    for v_id, record in existing_map.items():
         if v_id not in target_set:
             logger.info(f"Pruning video {v_id} for channel {channel_id}...")
+            file_path = record["file_path"]
             if file_path and os.path.exists(file_path):
                 try:
                     os.remove(file_path)
