@@ -4,8 +4,9 @@ aptPkgs = ["ffmpeg", "curl"]
 [phases.install]
 cmds = [
   "curl -fsSL https://deb.nodesource.com/setup_20.x | bash -",
-  "apt-get install -y nodejs"
+  "apt-get install -y nodejs",
+  "pip install -r requirements.txt"
 ]
 
 [start]
-cmd = "python -m uvicorn app.main:app --host 0.0.0.0 --port 3000"
+cmd = "/app/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 3000"
