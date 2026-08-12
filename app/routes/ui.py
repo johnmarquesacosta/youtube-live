@@ -1,9 +1,11 @@
 import os
+import json
 import shutil
 import logging
 from typing import Optional
-from fastapi import APIRouter, Request, Form, Depends, HTTPException, status
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Request, Form, Depends, HTTPException, status, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from starlette.responses import Response
 from fastapi.templating import Jinja2Templates
 
 from app.auth import verify_credentials, is_authenticated
@@ -241,3 +243,187 @@ async def delete_channel(request: Request, id: str):
             logger.warning(f"Failed to remove directory {channel_dir}: {e}")
 
     return RedirectResponse(url="/", status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _cookies_info() -> dict:
+    """Return cookies file status info."""
+    data_dir = os.getenv("DATA_DIR", "./data")
+    cookie_file = os.path.join(data_dir, "cookies.txt")
+    has_cookies = os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 0
+    cookies_size = ""
+    if has_cookies:
+        size = os.path.getsize(cookie_file)
+        if size > 1024:
+            cookies_size = f"{size / 1024:.1f} KB"
+        else:
+            cookies_size = f"{size} bytes"
+    return {"has_cookies": has_cookies, "cookies_size": cookies_size}
+
+
+@router.get("/settings", response_class=HTMLResponse)
+async def settings_page(request: Request):
+    if not is_authenticated(request):
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    info = _cookies_info()
+    return templates.TemplateResponse(request=request, name="settings.html", context=info)
+
+
+@router.post("/settings/cookies", response_class=HTMLResponse)
+async def upload_cookies(request: Request, cookies_file: UploadFile = File(...)):
+    if not is_authenticated(request):
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    data_dir = os.getenv("DATA_DIR", "./data")
+    os.makedirs(data_dir, exist_ok=True)
+    cookie_path = os.path.join(data_dir, "cookies.txt")
+
+    try:
+        content = await cookies_file.read()
+        text = content.decode("utf-8", errors="replace")
+
+        # Basic validation: Netscape cookies should have the header or tab-separated lines
+        if not text.strip():
+            info = _cookies_info()
+            info["error"] = "Uploaded file is empty."
+            return templates.TemplateResponse(request=request, name="settings.html", context=info,
+                                              status_code=status.HTTP_400_BAD_REQUEST)
+
+        with open(cookie_path, "w", encoding="utf-8") as f:
+            f.write(text)
+
+        logger.info(f"Cookies file uploaded successfully ({len(content)} bytes)")
+        info = _cookies_info()
+        info["success"] = "Cookies uploaded successfully! New downloads will use authentication."
+        return templates.TemplateResponse(request=request, name="settings.html", context=info)
+
+    except Exception as e:
+        logger.error(f"Error uploading cookies: {e}")
+        info = _cookies_info()
+        info["error"] = f"Error saving cookies: {e}"
+        return templates.TemplateResponse(request=request, name="settings.html", context=info,
+                                          status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+@router.post("/settings/cookies/delete")
+async def delete_cookies(request: Request):
+    if not is_authenticated(request):
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    data_dir = os.getenv("DATA_DIR", "./data")
+    cookie_path = os.path.join(data_dir, "cookies.txt")
+    if os.path.exists(cookie_path):
+        os.remove(cookie_path)
+        logger.info("Cookies file deleted.")
+
+    return RedirectResponse(url="/settings", status_code=status.HTTP_303_SEE_OTHER)
+
+
+@router.get("/settings/export")
+async def export_channels(request: Request):
+    """Export all channel configurations as a JSON file download."""
+    if not is_authenticated(request):
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    with get_db() as conn:
+        rows = conn.execute("SELECT * FROM channels ORDER BY created_at").fetchall()
+        channels = []
+        for row in rows:
+            channels.append({
+                "id": row["id"],
+                "youtube_channel_id": row["youtube_channel_id"],
+                "display_name": row["display_name"],
+                "stream_key": row["stream_key"],
+                "video_count": row["video_count"],
+                "check_interval_hours": row["check_interval_hours"],
+                "is_active": bool(row["is_active"]),
+            })
+
+    export_data = json.dumps({"channels": channels}, indent=2, ensure_ascii=False)
+
+    return Response(
+        content=export_data,
+        media_type="application/json",
+        headers={"Content-Disposition": "attachment; filename=yt-live-channels.json"}
+    )
+
+
+@router.post("/settings/import", response_class=HTMLResponse)
+async def import_channels(request: Request, config_file: UploadFile = File(...)):
+    """Import channel configurations from a previously exported JSON file."""
+    if not is_authenticated(request):
+        return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+
+    try:
+        content = await config_file.read()
+        text = content.decode("utf-8", errors="replace")
+        data = json.loads(text)
+        channels_list = data.get("channels", [])
+
+        if not channels_list:
+            info = _cookies_info()
+            info["error"] = "JSON file contains no channels."
+            return templates.TemplateResponse(request=request, name="settings.html", context=info,
+                                              status_code=status.HTTP_400_BAD_REQUEST)
+
+        imported = 0
+        skipped = 0
+        with get_db() as conn:
+            for ch in channels_list:
+                ch_id = ch.get("id", "").strip()
+                if not ch_id:
+                    skipped += 1
+                    continue
+
+                existing = conn.execute("SELECT id FROM channels WHERE id = ?", (ch_id,)).fetchone()
+                if existing:
+                    # Update existing channel config
+                    conn.execute("""
+                        UPDATE channels
+                        SET youtube_channel_id = ?,
+                            display_name = ?,
+                            stream_key = ?,
+                            video_count = ?,
+                            check_interval_hours = ?,
+                            is_active = ?
+                        WHERE id = ?
+                    """, (
+                        ch.get("youtube_channel_id", ""),
+                        ch.get("display_name", ch_id),
+                        ch.get("stream_key", ""),
+                        ch.get("video_count", 20),
+                        ch.get("check_interval_hours", 6),
+                        1 if ch.get("is_active", True) else 0,
+                        ch_id
+                    ))
+                else:
+                    conn.execute("""
+                        INSERT INTO channels (id, youtube_channel_id, display_name, stream_key, video_count, check_interval_hours, is_active, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'stopped')
+                    """, (
+                        ch_id,
+                        ch.get("youtube_channel_id", ""),
+                        ch.get("display_name", ch_id),
+                        ch.get("stream_key", ""),
+                        ch.get("video_count", 20),
+                        ch.get("check_interval_hours", 6),
+                        1 if ch.get("is_active", True) else 0
+                    ))
+                imported += 1
+
+        logger.info(f"Imported {imported} channels, skipped {skipped}")
+        info = _cookies_info()
+        info["success"] = f"Imported {imported} channel(s) successfully!" + (f" ({skipped} skipped)" if skipped else "")
+        return templates.TemplateResponse(request=request, name="settings.html", context=info)
+
+    except json.JSONDecodeError:
+        info = _cookies_info()
+        info["error"] = "Invalid JSON file. Please upload a file exported from this app."
+        return templates.TemplateResponse(request=request, name="settings.html", context=info,
+                                          status_code=status.HTTP_400_BAD_REQUEST)
+    except Exception as e:
+        logger.error(f"Error importing channels: {e}")
+        info = _cookies_info()
+        info["error"] = f"Import error: {e}"
+        return templates.TemplateResponse(request=request, name="settings.html", context=info,
+                                          status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)

@@ -18,25 +18,18 @@ def get_channel_videos_dir(channel_id: str) -> str:
 
 
 def get_cookies_path() -> str:
-    """Check for cookies file in DATA_DIR or create one from YOUTUBE_COOKIES env."""
+    """Returns path to cookies.txt if it exists in DATA_DIR."""
     cookie_file = os.path.join(DATA_DIR, "cookies.txt")
     if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 0:
         return cookie_file
-    
-    cookies_env = os.getenv("YOUTUBE_COOKIES", "").strip()
-    if cookies_env:
-        with open(cookie_file, "w", encoding="utf-8") as f:
-            f.write(cookies_env)
-        return cookie_file
-        
     return ""
 
 
 def download_and_normalize_video(channel_id: str, video_id: str) -> str:
     """
-    Downloads raw video with yt-dlp using anti-bot player clients & filters,
-    reencodes to standardized MP4 (H.264 + AAC, 1920x1080 30fps),
-    and returns normalized file path.
+    Downloads raw video with yt-dlp, reencodes to standardized MP4
+    (H.264 + AAC, 1920x1080 30fps) for seamless FFmpeg concat demuxer playback,
+    and returns the normalized file path.
     """
     videos_dir = get_channel_videos_dir(channel_id)
     raw_template = os.path.join(videos_dir, f"{video_id}_raw.%(ext)s")
@@ -51,42 +44,32 @@ def download_and_normalize_video(channel_id: str, video_id: str) -> str:
 
     cookies_path = get_cookies_path()
 
-    # Try different player client strategies to bypass YouTube datacenter bot checks
-    client_strategies = [
-        "youtube:player_client=android,ios,web",
-        "youtube:player_client=ios,web",
-        "youtube:player_client=mweb,android",
-        "youtube:player_client=tv,web"
+    dl_cmd = [
+        "yt-dlp",
+        "-f", "bv*[height<=1080]+ba/b",
+        "--extractor-args", "youtube:player_client=web",
+        "--no-playlist",
+        "-o", raw_template,
     ]
 
-    download_success = False
-    last_error = None
+    # Cookies are REQUIRED for datacenter IPs (Coolify / VPS)
+    if cookies_path:
+        dl_cmd.extend(["--cookies", cookies_path])
+    else:
+        logger.warning(
+            f"No cookies.txt found at {DATA_DIR}/cookies.txt. "
+            "YouTube will likely block downloads from datacenter IPs. "
+            "Upload cookies via Settings > Cookies in the dashboard."
+        )
 
-    for client_args in client_strategies:
-        dl_cmd = [
-            "yt-dlp",
-            "-f", "bv*[height<=1080]+ba/b",
-            "--extractor-args", client_args,
-            "--no-playlist",
-            "--match-filter", "!is_live & !upcoming & live_status != 'is_live' & live_status != 'is_incoming'",
-            "-o", raw_template,
-        ]
+    dl_cmd.append(url)
 
-        if cookies_path:
-            dl_cmd.extend(["--cookies", cookies_path])
-
-        dl_cmd.append(url)
-
-        try:
-            res = subprocess.run(dl_cmd, capture_output=True, text=True, check=True)
-            download_success = True
-            break
-        except subprocess.CalledProcessError as e:
-            last_error = e.stderr or e.stdout
-            logger.warning(f"yt-dlp attempt with '{client_args}' for {video_id} failed: {last_error[:200] if last_error else str(e)}")
-
-    if not download_success:
-        raise RuntimeError(f"All yt-dlp download strategies failed for {video_id}: {last_error}")
+    result = subprocess.run(dl_cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        error_msg = result.stderr or result.stdout
+        raise RuntimeError(
+            f"yt-dlp failed for {video_id}: {error_msg[:500]}"
+        )
 
     # Find raw downloaded file
     raw_files = glob.glob(os.path.join(videos_dir, f"{video_id}_raw.*"))

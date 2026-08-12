@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block title %}Settings — YouTube Live Loop{% endblock %}
+
+{% block content %}
+<div class="form-container">
+  <div style="margin-bottom: 1.5rem;">
+    <h2>Settings</h2>
+    <p class="form-hint">Application configuration and YouTube authentication</p>
+  </div>
+
+  {% if success %}
+  <div style="background: var(--status-running-bg); border: 1px solid var(--status-running); color: var(--status-running); padding: 0.75rem 1rem; border-radius: var(--radius-sm); font-size: 0.875rem; margin-bottom: 1rem;">
+    {{ success }}
+  </div>
+  {% endif %}
+
+  {% if error %}
+  <div class="alert-error">{{ error }}</div>
+  {% endif %}
+
+  <div style="margin-bottom: 2rem;">
+    <h3 style="margin-bottom: 0.75rem; font-size: 1.1rem;">YouTube Cookies</h3>
+
+    <div style="background: rgba(15, 23, 42, 0.5); padding: 1rem; border-radius: var(--radius-sm); margin-bottom: 1rem;">
+      <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.7;">
+        <strong style="color: var(--status-error);">Required for server/VPS deployments.</strong><br>
+        YouTube blocks downloads from datacenter IPs. You need to provide cookies from a logged-in browser session.<br><br>
+        <strong>How to export cookies:</strong><br>
+        1. Install a browser extension like <strong>"Get cookies.txt LOCALLY"</strong> (Chrome/Firefox).<br>
+        2. Log into YouTube in your browser.<br>
+        3. Navigate to <code>youtube.com</code> and export the cookies as a <code>.txt</code> file (Netscape format).<br>
+        4. Upload the file below.
+      </p>
+    </div>
+
+    {% if has_cookies %}
+    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+      <span class="badge badge-running"><span class="badge-dot"></span> Cookies loaded</span>
+      <span class="form-hint">File: {{ cookies_size }}</span>
+    </div>
+    {% else %}
+    <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem;">
+      <span class="badge badge-error"><span class="badge-dot"></span> No cookies</span>
+      <span class="form-hint">Downloads will fail on datacenter IPs</span>
+    </div>
+    {% endif %}
+
+    <form action="/settings/cookies" method="POST" enctype="multipart/form-data">
+      <div class="form-group">
+        <label class="form-label" for="cookies_file">Upload cookies.txt</label>
+        <input type="file" id="cookies_file" name="cookies_file" class="form-control" accept=".txt" required>
+        <span class="form-hint">Netscape cookie format exported from your browser</span>
+      </div>
+      <button type="submit" class="btn btn-primary">Upload Cookies</button>
+    </form>
+
+    {% if has_cookies %}
+    <form action="/settings/cookies/delete" method="POST" style="margin-top: 0.75rem;">
+      <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Delete cookies? Downloads will stop working on datacenter IPs.')">
+        Delete Cookies
+      </button>
+    </form>
+    {% endif %}
+  </div>
+
+  <hr style="border-color: var(--border-color); margin: 2rem 0;">
+
+  <div style="margin-bottom: 2rem;">
+    <h3 style="margin-bottom: 0.75rem; font-size: 1.1rem;">Channel Config — Export / Import</h3>
+
+    <div style="background: rgba(15, 23, 42, 0.5); padding: 1rem; border-radius: var(--radius-sm); margin-bottom: 1rem;">
+      <p style="font-size: 0.85rem; color: var(--text-muted); line-height: 1.7;">
+        Export your channel configurations as a JSON backup before redeploying.<br>
+        After a fresh deploy, import the file to restore all channels instantly.<br>
+        <strong>Includes:</strong> channel IDs, YouTube channel IDs, display names, stream keys, video count, check intervals, and active state.
+      </p>
+    </div>
+
+    <div style="display: flex; gap: 1rem; align-items: flex-start; flex-wrap: wrap;">
+      <a href="/settings/export" class="btn btn-success" download>
+        ⬇ Export Channels
+      </a>
+
+      <form action="/settings/import" method="POST" enctype="multipart/form-data" style="display: flex; gap: 0.75rem; align-items: flex-end;">
+        <div class="form-group" style="margin-bottom: 0;">
+          <label class="form-label" for="config_file">Import from JSON</label>
+          <input type="file" id="config_file" name="config_file" class="form-control" accept=".json" required>
+        </div>
+        <button type="submit" class="btn btn-primary" style="white-space: nowrap;">⬆ Import</button>
+      </form>
+    </div>
+  </div>
+
+  <div style="margin-top: 2rem;">
+    <a href="/" class="btn btn-secondary">← Back to Dashboard</a>
+  </div>
+</div>
+{% endblock %}

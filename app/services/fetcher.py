@@ -55,15 +55,19 @@ def get_channel_uploads_playlist_id(channel_identifier: str, api_key: str = "") 
 
 
 def fetch_latest_video_ids_api(channel_identifier: str, video_count: int = 20, api_key: str = "") -> List[str]:
-    """Fetch recent video IDs from channel using YouTube Data API v3."""
+    """Fetch recent video IDs from channel using YouTube Data API v3.
+    Filters out live and upcoming videos that cannot be downloaded."""
     key = api_key or YOUTUBE_API_KEY
     uploads_playlist_id = get_channel_uploads_playlist_id(channel_identifier, key)
+    
+    # Request more than needed since we'll filter some out
+    fetch_count = min(video_count * 2, 50)
     
     url = "https://www.googleapis.com/youtube/v3/playlistItems"
     params = {
         "part": "snippet",
         "playlistId": uploads_playlist_id,
-        "maxResults": min(video_count, 50),
+        "maxResults": fetch_count,
         "key": key
     }
     
@@ -72,12 +76,38 @@ def fetch_latest_video_ids_api(channel_identifier: str, video_count: int = 20, a
         res.raise_for_status()
         data = res.json()
         
-        video_ids = []
+        candidate_ids = []
         for item in data.get("items", []):
             resource = item.get("snippet", {}).get("resourceId", {})
             if resource.get("kind") == "youtube#video":
-                video_ids.append(resource.get("videoId"))
-        return video_ids[:video_count]
+                candidate_ids.append(resource.get("videoId"))
+        
+        if not candidate_ids:
+            return []
+        
+        # Second pass: check liveBroadcastContent via videos.list
+        # Process in chunks of 50 (API limit)
+        filtered_ids = []
+        for i in range(0, len(candidate_ids), 50):
+            chunk = candidate_ids[i:i+50]
+            vid_params = {
+                "part": "snippet,contentDetails",
+                "id": ",".join(chunk),
+                "key": key
+            }
+            vid_res = client.get("https://www.googleapis.com/youtube/v3/videos", params=vid_params)
+            vid_res.raise_for_status()
+            vid_data = vid_res.json()
+            
+            for vid_item in vid_data.get("items", []):
+                broadcast_status = vid_item.get("snippet", {}).get("liveBroadcastContent", "none")
+                # Only include completed/non-live videos
+                if broadcast_status == "none":
+                    filtered_ids.append(vid_item["id"])
+                else:
+                    logger.info(f"Skipping video {vid_item['id']} (liveBroadcastContent={broadcast_status})")
+        
+        return filtered_ids[:video_count]
 
 
 def fetch_latest_video_ids_ytdlp(channel_identifier: str, video_count: int = 20) -> List[str]:
