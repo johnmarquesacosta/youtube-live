@@ -91,7 +91,8 @@ def fetch_latest_video_ids_ytdlp(channel_identifier: str, video_count: int = 20)
     cmd = [
         "yt-dlp",
         "--flat-playlist",
-        "--playlist-end", str(video_count),
+        "--playlist-end", str(video_count * 2),
+        "--extractor-args", "youtube:player_client=android,ios,web",
         "--dump-json",
         channel_url
     ]
