@@ -5,7 +5,7 @@ import threading
 import subprocess
 from typing import Dict, Optional
 from app.db import get_db
-from app.services.playlist import generate_playlist, get_playlist_path
+from app.services.playlist import generate_playlist, get_playlist_path, apply_pending_playlist
 
 logger = logging.getLogger(__name__)
 
@@ -34,10 +34,17 @@ class StreamManager:
                     return False
                 stream_key = channel["stream_key"]
 
+            # Apply any pending playlist before starting
+            apply_pending_playlist(channel_id)
+
             # Ensure valid playlist.txt
             playlist_path = get_playlist_path(channel_id)
             if not os.path.exists(playlist_path) or os.path.getsize(playlist_path) == 0:
-                playlist_path = generate_playlist(channel_id)
+                # No active playlist — generate directly as active (first run)
+                from app.services.playlist import get_pending_playlist_path
+                pending = get_pending_playlist_path(channel_id)
+                generate_playlist(channel_id)
+                apply_pending_playlist(channel_id)
 
             if not os.path.exists(playlist_path) or os.path.getsize(playlist_path) == 0:
                 logger.error(f"Cannot start stream for {channel_id}: playlist is empty or missing.")
@@ -103,13 +110,15 @@ class StreamManager:
         return True
 
     def restart_stream(self, channel_id: str) -> bool:
-        """Restarts FFmpeg stream keeping is_active setting unchanged."""
+        """Restarts FFmpeg stream keeping is_active setting unchanged.
+        Applies pending playlist (playlist_new.txt -> playlist.txt) AFTER
+        stopping ffmpeg and BEFORE starting the new process."""
         logger.info(f"Restarting stream for channel {channel_id}...")
         with self._lock:
             self._stop_process_unlocked(channel_id)
 
-        # Regenerate playlist
-        generate_playlist(channel_id)
+        # Apply pending playlist now that ffmpeg is stopped
+        apply_pending_playlist(channel_id)
 
         with get_db() as conn:
             channel = conn.execute("SELECT is_active FROM channels WHERE id = ?", (channel_id,)).fetchone()

@@ -11,6 +11,7 @@ from app.routes.ui import router as ui_router
 from app.routes.api import router as api_router
 from app.services.scheduler import start_scheduler, stop_scheduler
 from app.services.stream_manager import stream_manager
+from app.services.job_queue import start_download_worker, stop_download_worker
 
 logging.basicConfig(
     level=logging.INFO,
@@ -28,6 +29,9 @@ async def lifespan(app: FastAPI):
     logger.info("Starting background scheduler...")
     start_scheduler()
 
+    logger.info("Starting serial download worker...")
+    start_download_worker()
+
     # Re-activate streams for active channels on startup
     with get_db() as conn:
         active_channels = conn.execute("SELECT id FROM channels WHERE is_active = 1").fetchall()
@@ -43,6 +47,9 @@ async def lifespan(app: FastAPI):
     yield
 
     # Shutdown tasks
+    logger.info("Stopping serial download worker...")
+    stop_download_worker()
+
     logger.info("Stopping background scheduler...")
     stop_scheduler()
 

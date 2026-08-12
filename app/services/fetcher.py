@@ -8,6 +8,15 @@ import httpx
 logger = logging.getLogger(__name__)
 
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+DATA_DIR = os.getenv("DATA_DIR", "./data")
+
+
+def _get_cookies_path() -> str:
+    """Returns path to cookies.txt if it exists in DATA_DIR."""
+    cookie_file = os.path.join(DATA_DIR, "cookies.txt")
+    if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 0:
+        return cookie_file
+    return ""
 
 
 def get_channel_uploads_playlist_id(channel_identifier: str, api_key: str = "") -> str:
@@ -56,7 +65,7 @@ def get_channel_uploads_playlist_id(channel_identifier: str, api_key: str = "") 
 
 def fetch_latest_video_ids_api(channel_identifier: str, video_count: int = 20, api_key: str = "") -> List[str]:
     """Fetch recent video IDs from channel using YouTube Data API v3.
-    Filters out live and upcoming videos that cannot be downloaded."""
+    Filters out live, upcoming, and still-broadcasting videos."""
     key = api_key or YOUTUBE_API_KEY
     uploads_playlist_id = get_channel_uploads_playlist_id(channel_identifier, key)
     
@@ -101,17 +110,26 @@ def fetch_latest_video_ids_api(channel_identifier: str, video_count: int = 20, a
             
             for vid_item in vid_data.get("items", []):
                 broadcast_status = vid_item.get("snippet", {}).get("liveBroadcastContent", "none")
-                # Only include completed/non-live videos
-                if broadcast_status == "none":
-                    filtered_ids.append(vid_item["id"])
-                else:
+                duration = vid_item.get("contentDetails", {}).get("duration", "")
+                
+                # Skip live/upcoming broadcasts
+                if broadcast_status != "none":
                     logger.info(f"Skipping video {vid_item['id']} (liveBroadcastContent={broadcast_status})")
+                    continue
+                
+                # Skip videos with P0D duration (still-broadcasting indicator)
+                if duration == "P0D":
+                    logger.info(f"Skipping video {vid_item['id']} (duration=P0D, likely still broadcasting)")
+                    continue
+                
+                filtered_ids.append(vid_item["id"])
         
         return filtered_ids[:video_count]
 
 
 def fetch_latest_video_ids_ytdlp(channel_identifier: str, video_count: int = 20) -> List[str]:
-    """Fallback: Fetch recent video IDs using yt-dlp flat playlist extraction."""
+    """Fallback: Fetch recent video IDs using yt-dlp flat playlist extraction.
+    Filters out live and upcoming videos via --match-filter."""
     channel_identifier = channel_identifier.strip()
     if channel_identifier.startswith("@") or channel_identifier.startswith("UC"):
         channel_url = f"https://www.youtube.com/{channel_identifier}/videos"
@@ -123,12 +141,22 @@ def fetch_latest_video_ids_ytdlp(channel_identifier: str, video_count: int = 20)
         "--flat-playlist",
         "--playlist-end", str(video_count * 2),
         "--extractor-args", "youtube:player_client=android,ios,web",
+        "--match-filter", "!is_live & !is_upcoming",
+        "--sleep-requests", "1",
+        "--retries", "5",
+        "--retry-sleep", "10",
         "--dump-json",
-        channel_url
     ]
 
+    # Add cookies if available
+    cookies_path = _get_cookies_path()
+    if cookies_path:
+        cmd.extend(["--cookies", cookies_path])
+
+    cmd.append(channel_url)
+
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=120)
         video_ids = []
         for line in res.stdout.strip().split("\n"):
             if not line:
@@ -141,6 +169,9 @@ def fetch_latest_video_ids_ytdlp(channel_identifier: str, video_count: int = 20)
             except json.JSONDecodeError:
                 continue
         return video_ids[:video_count]
+    except subprocess.TimeoutExpired:
+        logger.error(f"yt-dlp fetch timed out for {channel_identifier} (120s limit)")
+        raise RuntimeError(f"yt-dlp fetch timed out for {channel_identifier}")
     except Exception as e:
         logger.error(f"yt-dlp fetch failed for {channel_identifier}: {e}")
         raise

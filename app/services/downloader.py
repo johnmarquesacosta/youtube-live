@@ -5,10 +5,14 @@ import subprocess
 from datetime import datetime
 from typing import List, Dict, Any
 from app.db import get_db
+from app.services.playlist import get_referenced_files
+from app.services.job_queue import enqueue_download
 
 logger = logging.getLogger(__name__)
 
 DATA_DIR = os.getenv("DATA_DIR", "./data")
+DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "1800"))   # 30 min
+TRANSCODE_TIMEOUT = int(os.getenv("TRANSCODE_TIMEOUT", "3600"))  # 1 hour
 
 
 def get_channel_videos_dir(channel_id: str) -> str:
@@ -23,6 +27,46 @@ def get_cookies_path() -> str:
     if os.path.exists(cookie_file) and os.path.getsize(cookie_file) > 0:
         return cookie_file
     return ""
+
+
+def _check_is_live(video_id: str, cookies_path: str) -> bool:
+    """
+    Quick pre-download check: queries yt-dlp to determine if a video is
+    currently live or upcoming. Returns True if the video should be skipped.
+    """
+    url = f"https://www.youtube.com/watch?v={video_id}"
+    cmd = [
+        "yt-dlp",
+        "--skip-download",
+        "--print", "%(is_live)s|%(live_status)s",
+        "--no-warnings",
+    ]
+    if cookies_path:
+        cmd.extend(["--cookies", cookies_path])
+    cmd.append(url)
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            # If we can't determine status, err on the side of caution and allow download
+            return False
+        output = result.stdout.strip()
+        if not output:
+            return False
+        parts = output.split("|")
+        is_live_str = parts[0].strip().lower() if len(parts) > 0 else ""
+        live_status = parts[1].strip().lower() if len(parts) > 1 else ""
+
+        if is_live_str == "true" or live_status in ("is_live", "is_upcoming"):
+            logger.info(f"Video {video_id} is live/upcoming (is_live={is_live_str}, live_status={live_status}). Skipping.")
+            return True
+        return False
+    except subprocess.TimeoutExpired:
+        logger.warning(f"Live-check timed out for {video_id}. Allowing download attempt.")
+        return False
+    except Exception as e:
+        logger.warning(f"Live-check failed for {video_id}: {e}. Allowing download attempt.")
+        return False
 
 
 def download_and_normalize_video(channel_id: str, video_id: str) -> str:
@@ -44,27 +88,37 @@ def download_and_normalize_video(channel_id: str, video_id: str) -> str:
 
     cookies_path = get_cookies_path()
 
+    # Cookies are REQUIRED for datacenter IPs (Coolify / VPS)
+    if not cookies_path:
+        raise RuntimeError(
+            f"cookies.txt ausente em {DATA_DIR}/cookies.txt — obrigatório em IP de datacenter. "
+            "Upload cookies via Settings > Cookies no dashboard."
+        )
+
+    # Pre-download live check — prevent downloading own live stream
+    if _check_is_live(video_id, cookies_path):
+        raise LiveVideoError(f"Video {video_id} is live/upcoming — skipping download")
+
     dl_cmd = [
         "yt-dlp",
         "-f", "bv*[height<=1080]+ba/b",
-        "--extractor-args", "youtube:player_client=web",
+        "--extractor-args", "youtube:player_client=android,ios,web",
         "--no-playlist",
+        "--sleep-requests", "1",
+        "--retries", "5",
+        "--retry-sleep", "10",
+        "--cookies", cookies_path,
         "-o", raw_template,
+        url,
     ]
 
-    # Cookies are REQUIRED for datacenter IPs (Coolify / VPS)
-    if cookies_path:
-        dl_cmd.extend(["--cookies", cookies_path])
-    else:
-        logger.warning(
-            f"No cookies.txt found at {DATA_DIR}/cookies.txt. "
-            "YouTube will likely block downloads from datacenter IPs. "
-            "Upload cookies via Settings > Cookies in the dashboard."
+    try:
+        result = subprocess.run(dl_cmd, capture_output=True, text=True, timeout=DOWNLOAD_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"yt-dlp download timed out for {video_id} after {DOWNLOAD_TIMEOUT}s"
         )
 
-    dl_cmd.append(url)
-
-    result = subprocess.run(dl_cmd, capture_output=True, text=True)
     if result.returncode != 0:
         error_msg = result.stderr or result.stdout
         raise RuntimeError(
@@ -92,7 +146,16 @@ def download_and_normalize_video(channel_id: str, video_id: str) -> str:
         "-ar", "44100",
         normalized_path
     ]
-    subprocess.run(transcode_cmd, check=True)
+
+    try:
+        subprocess.run(transcode_cmd, check=True, timeout=TRANSCODE_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # Clean up partial output
+        if os.path.exists(normalized_path):
+            os.remove(normalized_path)
+        raise RuntimeError(
+            f"FFmpeg transcode timed out for {video_id} after {TRANSCODE_TIMEOUT}s"
+        )
 
     # Clean up raw file
     if os.path.exists(raw_path) and raw_path != normalized_path:
@@ -104,9 +167,16 @@ def download_and_normalize_video(channel_id: str, video_id: str) -> str:
     return normalized_path
 
 
+class LiveVideoError(Exception):
+    """Raised when a video is detected as live/upcoming and should be skipped."""
+    pass
+
+
 def sync_channel_videos(channel_id: str, target_video_ids: List[str]) -> bool:
     """
     Downloads missing videos in target_video_ids and prunes older videos.
+    Downloads go through the global serial queue (job_queue) to prevent
+    parallel downloads that trigger bot detection.
     Returns True if the list of downloaded videos changed, False otherwise.
     """
     changed = False
@@ -131,6 +201,8 @@ def sync_channel_videos(channel_id: str, target_video_ids: List[str]) -> bool:
             existing_map[video_id] = {"file_path": None, "status": "pending"}
 
     # 2. Process downloads for videos that are not 'ready'
+    #    Downloads are enqueued into the global serial queue.
+    futures = []
     for idx, video_id in enumerate(target_video_ids):
         video_record = existing_map.get(video_id)
         
@@ -140,34 +212,13 @@ def sync_channel_videos(channel_id: str, target_video_ids: List[str]) -> bool:
         file_exists = file_path and os.path.exists(file_path)
         
         if not is_ready or not file_exists:
-            try:
-                # Set status to downloading/pending (optional, could just leave as pending)
-                norm_path = download_and_normalize_video(channel_id, video_id)
-                now_str = datetime.utcnow().isoformat()
-                with get_db() as conn:
-                    conn.execute("""
-                        UPDATE channel_videos SET
-                            file_path = ?,
-                            downloaded_at = ?,
-                            position = ?,
-                            status = 'ready',
-                            error_message = NULL
-                        WHERE channel_id = ? AND youtube_video_id = ?
-                    """, (norm_path, now_str, idx, channel_id, video_id))
-                changed = True
-            except Exception as e:
-                logger.error(f"Error downloading/normalizing video {video_id} for channel {channel_id}: {e}")
-                # Save the error status
-                error_msg = str(e)
-                with get_db() as conn:
-                    conn.execute("""
-                        UPDATE channel_videos SET
-                            status = 'error',
-                            error_message = ?,
-                            position = ?
-                        WHERE channel_id = ? AND youtube_video_id = ?
-                    """, (error_msg, idx, channel_id, video_id))
-                changed = True
+            # Enqueue download through the global serial worker
+            future = enqueue_download(
+                channel_id, video_id,
+                download_and_normalize_video,
+                channel_id, video_id
+            )
+            futures.append((idx, video_id, future))
         else:
             # Update position if needed
             with get_db() as conn:
@@ -176,17 +227,70 @@ def sync_channel_videos(channel_id: str, target_video_ids: List[str]) -> bool:
                     (idx, channel_id, video_id)
                 )
 
+    # Wait for all enqueued downloads to complete
+    for idx, video_id, future in futures:
+        try:
+            norm_path = future.result()  # blocks until this download finishes
+            now_str = datetime.utcnow().isoformat()
+            with get_db() as conn:
+                conn.execute("""
+                    UPDATE channel_videos SET
+                        file_path = ?,
+                        downloaded_at = ?,
+                        position = ?,
+                        status = 'ready',
+                        error_message = NULL
+                    WHERE channel_id = ? AND youtube_video_id = ?
+                """, (norm_path, now_str, idx, channel_id, video_id))
+            changed = True
+        except LiveVideoError as e:
+            logger.info(f"Skipped live/upcoming video {video_id} for channel {channel_id}: {e}")
+            with get_db() as conn:
+                conn.execute("""
+                    UPDATE channel_videos SET
+                        status = 'skipped_live',
+                        error_message = ?,
+                        position = ?
+                    WHERE channel_id = ? AND youtube_video_id = ?
+                """, (str(e), idx, channel_id, video_id))
+            changed = True
+        except Exception as e:
+            logger.error(f"Error downloading/normalizing video {video_id} for channel {channel_id}: {e}")
+            error_msg = str(e)
+            with get_db() as conn:
+                conn.execute("""
+                    UPDATE channel_videos SET
+                        status = 'error',
+                        error_message = ?,
+                        position = ?
+                    WHERE channel_id = ? AND youtube_video_id = ?
+                """, (error_msg, idx, channel_id, video_id))
+            changed = True
+
     # 3. Prune old videos no longer in target_video_ids
+    #    Respects referenced files — won't delete files still in active/pending playlists
     target_set = set(target_video_ids)
+    referenced_files = get_referenced_files(channel_id)
+
     for v_id, record in existing_map.items():
         if v_id not in target_set:
-            logger.info(f"Pruning video {v_id} for channel {channel_id}...")
             file_path = record["file_path"]
             if file_path and os.path.exists(file_path):
+                # Check if file is still referenced in active or pending playlist
+                abs_file_path = os.path.abspath(file_path).replace("\\", "/")
+                if abs_file_path in referenced_files:
+                    logger.info(
+                        f"Skipping prune of {v_id} — file still referenced in active/pending playlist. "
+                        "Will be pruned in next cycle after playlist swap."
+                    )
+                    continue
+
+                logger.info(f"Pruning video {v_id} for channel {channel_id}...")
                 try:
                     os.remove(file_path)
                 except Exception as e:
                     logger.warning(f"Error deleting video file {file_path}: {e}")
+
             with get_db() as conn:
                 conn.execute(
                     "DELETE FROM channel_videos WHERE channel_id = ? AND youtube_video_id = ?",

@@ -15,10 +15,11 @@ scheduler = AsyncIOScheduler()
 def sync_channel_job(channel_id: str):
     """
     Executes the sync pipeline for a channel:
-    1. Fetch latest video IDs
-    2. Download new videos & prune old ones
+    1. Fetch latest video IDs (with live/upcoming filter)
+    2. Download new videos via serial queue & prune old ones (respecting referenced files)
     3. Update last_checked_at
-    4. If videos changed, regenerate playlist & restart stream if active
+    4. If videos changed, generate pending playlist & restart stream
+       (restart_stream applies pending playlist atomically with ffmpeg stopped)
     """
     logger.info(f"Running scheduled sync job for channel {channel_id}...")
     with get_db() as conn:
