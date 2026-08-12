@@ -1,9 +1,5 @@
 [phases.setup]
-aptPkgs = ["ffmpeg", "curl"]
-cmds = [
-  "curl -fsSL https://deb.nodesource.com/setup_20.x | bash -",
-  "apt-get install -y nodejs"
-]
+nixPkgs = ["python311", "nodejs_20", "ffmpeg"]
 
 [start]
 cmd = "uvicorn app.main:app --host 0.0.0.0 --port 3000"
